@@ -1,0 +1,12 @@
+# 忽略 Python 的虚拟环境和依赖
+.venv/
+venv/
+__pycache__/
+
+# 忽略 Node.js 的依赖
+node_modules/
+
+# 忽略 C++ 的编译产物和临时文件
+build/
+bin/
+*.exe
