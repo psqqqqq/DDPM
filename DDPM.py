@@ -5,10 +5,11 @@ from torchvision import datasets, transforms
 device = "cuda"
 batch_size = 32
 image_size = 32
-# %%
+
+# %% setup the dataset Mnist,小型灰度图像
 transform = transforms.Compose(
     [
-        transforms.Resize(image_size),
+        transforms.Resize(image_size), # 每张图片调整为32*32像素
         transforms.ToTensor(),
         transforms.Normalize((0.0,), (1.0,)),
     ]
@@ -19,6 +20,7 @@ train_loader = torch.utils.data.DataLoader(
     batch_size=batch_size,
     shuffle=True,
 )
+
 
 lr = 1e-4
 epochs = 100
