@@ -51,7 +51,7 @@
 * **IS (Inception Score) 或 成员推理防御评估** ：
   检查生成的图像是不是只会重复训练集里的那几张。如果发现生成的图像和训练集某张图的像素级差异（MSE）几乎为零，说明已经过拟合了，必须回退到上一个 Checkpoint。
 
-## 💡 给你的硕士论文推进建议
+## 硕士论文推进建议
 
 1. **论文亮点在于“条件控制（Condition）”** ：
    既然你是做生存分析（Survival Analysis）相关的 CT 生成，患者在不同时间段的数据稀疏。你的 Diffusion Model 最好是一个 **条件扩散模型（Conditional Diffusion）** 。
