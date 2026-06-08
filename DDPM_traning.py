@@ -1,7 +1,9 @@
 ﻿import deepinv
+import os
 import torch
 from torchvision import datasets, transforms
-
+from tqdm import tqdm # 进度条模块
+from torchvision.utils import save_image  # 生成监控具体图片
 # DDPM GPU 训练脚本。
 # 目标：训练一个噪声预测网络 epsilon_theta(x_t, t)。
 # 给定原图 x_0 和随机时间步 t，先按前向扩散公式得到带噪图 x_t，
@@ -33,8 +35,17 @@ beta_end = 0.02
 # 扩散总步数 T，时间步 t 的取值范围是 [0, timesteps - 1]。
 timesteps = 1000
 
-# 保存训练后模型参数的位置。
-checkpoint_path = "trained_diffusion_model.pth"
+sample_dir = "outputs/monitor_samples"
+sample_interval = 10  # 和保存权重频率对应
+n_sample_images = 16  # 在训练过程中进行效果监控时，每次执行采样（生成图片）要一次性生成 16（4*4）张数字图片。
+
+os.makedirs(sample_dir, exist_ok=True)
+
+# 保存训练后模型参数的位置。在经历 100 轮（epochs = 100）训练、看遍了MNIST 数据集后学到的权重 Weights和偏置 Biases）。
+# pth（或 .pt）是 PyTorch 框架官方推荐的模型文件后缀名,它本质上是一个经过序列化（Pickle）压缩的文件，只有 PyTorch 能够直接读取它。
+checkpoint_dir="checkpoints"  # 存到checkpoints文件夹下
+checkpoint_interval = 10  # 每隔10个epoch保存一次权重文件pth
+final_checkpoint_path = f"{checkpoint_dir}/final_trained_diffusion_model.pth"
 
 
 # TODO:setup the dataset
@@ -50,7 +61,7 @@ transform = transforms.Compose(
     ]
 )
 
-# DataLoader 负责分批读取训练数据。
+# DataLoader 负责分批读取训练数据。这里是从网上下载数据集
 train_loader = torch.utils.data.DataLoader(
     # train=True 使用训练集；download=True 在本地没有数据时自动下载到 ./data。
     datasets.MNIST(root="./data", train=True, download=True, transform=transform),
@@ -89,14 +100,63 @@ alphas_cumprod = torch.cumprod(alphas, dim=0)
 sqrt_alphas_cumprod = torch.sqrt(alphas_cumprod)
 sqrt_one_minus_alphas_cumprod = torch.sqrt(1.0 - alphas_cumprod)
 
+# TODO:监控图函数
+def sample_current_model(model, epoch):
+    """
+    用当前训练到第 epoch 轮的模型，从纯噪声开始反向采样，
+    保存一张 4x4 的数字生成监控图。
+    """
+    model.eval()
+
+    with torch.no_grad():
+        x = torch.randn(
+            n_sample_images,
+            1,
+            image_size,
+            image_size,
+            device=device,
+        )
+
+        for t in reversed(range(timesteps)):
+            t_tensor = torch.ones(
+                n_sample_images,
+                device=device,
+                dtype=torch.long,
+            ) * t
+
+            predicted_noise = model(x, t_tensor, type_t="timestep")
+
+            alpha = alphas[t]
+            alpha_cumprod = alphas_cumprod[t]
+            beta = betas[t]
+
+            if t > 0:
+                noise = torch.randn_like(x)
+            else:
+                noise = 0
+
+            x = (
+                (1 / torch.sqrt(alpha))
+                * (x - (beta / torch.sqrt(1 - alpha_cumprod)) * predicted_noise)
+                + torch.sqrt(beta) * noise
+            )
+
+        x = torch.clamp(x, 0.0, 1.0)
+
+        save_path = f"{sample_dir}/epoch_{epoch:03d}.png"
+        save_image(x, save_path, nrow=4)
+
+    model.train()
+    print(f"第 {epoch} 个 epoch 的生成监控图已保存到：{save_path}")
+
 # %% 训练主循环。TODO:Training loop,每一步从0-1000之间随机抽取一个时间步t,从标准正态中抽取一个噪声epsilon
 # TODO然后用之前推导的variance-preserving formulation，来计算出带噪声的图像
 for epoch in range(epochs):
     # 启用训练模式。对 Dropout、BatchNorm 等层，训练和推理行为不同。
     model.train()
     total_loss = 0.0
-
-    for data, _ in train_loader:
+    progress_bar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{epochs}")  # 加个进度条
+    for data, _ in progress_bar:
         # data 的形状是 [B, 1, 32, 32]。
         # 第二个返回值是 MNIST 标签，DDPM 是无条件生成模型，这里不使用标签。
         imgs = data.to(device) # TODO:这就是X0
@@ -122,17 +182,24 @@ for epoch in range(epochs):
         estimated_noise = model(noised_imgs, t, type_t="timestep")
 
         # 损失越小，说明预测噪声越接近真实噪声。
-        loss = mse(estimated_noise, noise)
+        loss = mse(estimated_noise, noise).mean() # 这里要加mean()改成标量
 
         # 计算梯度并更新参数。
-        loss.backward()
+        loss.backward() # 直接调用 loss.backward() 时，loss 必须是一个标量，也就是只有一个数
         optimizer.step()
 
         total_loss += loss.item()
-
+        progress_bar.set_postfix(loss=loss.item())
+    # 监控训练过程
     avg_loss = total_loss / len(train_loader)
-    print(f"Epoch [{epoch + 1}/{epochs}], Loss: {avg_loss:.6f}")
-
-# %% TODO:保存模型参数，之后采样或继续训练时可以重新加载。
-torch.save(model.state_dict(), checkpoint_path)
-print(f"GPU model saved to {checkpoint_path}")
+    print(f"Epoch [{epoch + 1}/{epochs}], Loss: {avg_loss:.6f}") # :表示格式化操作的开始，.6表示保留6位小数，f表示作为浮点数来格式化
+    if (epoch + 1) % checkpoint_interval == 0:  # 每隔interval保存一次结果
+        save_path = f"{checkpoint_dir}/model_epoch_{epoch + 1}.pth"
+        torch.save(model.state_dict(), save_path)
+        print(f"epoch为{epoch}时权重中途已保存")
+    # 每隔 sample_interval 个 epoch 保存一次生成图片
+    if (epoch + 1) == 1 or (epoch + 1) % sample_interval == 0:
+        sample_current_model(model, epoch + 1)
+    # %% TODO:保存模型参数，之后采样或继续训练时可以重新加载。
+torch.save(model.state_dict(), final_checkpoint_path) #
+print(f" model 最后跑完所有epoch已保存到  {final_checkpoint_path}")
