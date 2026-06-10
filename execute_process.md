@@ -185,72 +185,10 @@ model=deepinv.models.DiffUNet(
 
 这是数据集应该是什么？还有up主说我们真正希望的是，既能保持这种高视觉保真度，又能在仅仅几个推理步骤中实现什么意思？
 
-# 替换代码
+# 替换代码(不能这样)
 
 ```python
-import deepinv
-import torch
-from torchvision.utils import save_image
-from pathlib import Path
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
-
-# 🚨 核心修改 1：FFHQ 官方预训练权重对应的图像尺寸（通常是 64x64 或 128x128，具体取决于库版本，这里以 64 为例）
-image_size = 64  
-
-# 一次生成的图片数量
-n_samples = 16  # 人脸较大，可以适当调小一点看效果
-
-# 扩散步数和 Beta 调度（需要匹配 deepinv 官方 FFHQ 模型的训练设置，通常默认也是 1000 步）
-beta_start = 1e-4
-beta_end = 0.02
-timesteps = 1000
-
-output_path = Path("outputs/samples/ffhq_generated_samples.png")
-
-# 🚨 核心修改 2：改变输入输出通道，并指定 pretrained="ffhq"
-model = deepinv.models.DiffUNet(
-    in_channels=3,     # 👈 FFHQ 是 RGB 彩色图，必须是 3 通道
-    out_channels=3,    # 👈 输出也必须是 3 通道
-    pretrained="ffhq", # 👈 告诉 deepinv 自动从云端下载并导入 FFHQ 的官方预训练权重
-).to(device)
-
-model.eval()
-
-# 构造反向采样公式需要的系数表
-betas = torch.linspace(beta_start, beta_end, timesteps, device=device)
-alphas = 1.0 - betas
-alphas_cumprod = torch.cumprod(alphas, dim=0)
-
-# 采样阶段（Up主说的：这一段核心去噪逻辑完全不需要变）
-with torch.no_grad():
-    # 🚨 核心修改 3：从 3 通道的纯高斯噪声开始 [n_samples, 3, 64, 64]
-    x = torch.randn(n_samples, 3, image_size, image_size, device=device)
-
-    for t in reversed(range(timesteps)):
-        t_tensor = torch.full((n_samples,), t, device=device, dtype=torch.long)
-        predicted_noise = model(x, t_tensor, type_t="timestep")
-
-        alpha = alphas[t]
-        alpha_cumprod = alphas_cumprod[t]
-        beta = betas[t]
-
-        if t > 0:
-            noise = torch.randn_like(x)
-        else:
-            noise = 0
-
-        # DDPM 反向采样公式不变
-        x = (
-            (1 / torch.sqrt(alpha))
-            * (x - (beta / torch.sqrt(1 - alpha_cumprod)) * predicted_noise)
-            + torch.sqrt(beta) * noise
-        )
-
-    x = torch.clamp(x, 0.0, 1.0)
-    save_image(x, output_path, nrow=4) # 4x4 网格展现
-
-print(f"FFHQ 生成图片已保存至 {output_path}")
 ```
 
 执行以上代码，会自动下载对应的权重文件.pth
